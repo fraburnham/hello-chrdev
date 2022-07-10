@@ -5,13 +5,13 @@
   ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
 
-** WIP Loading and Unloading the Module
-
+** TODO Maybe? Some Definitions
+** Loading and Unloading the Module
 *** Structs and Macros
 
     We need to set up some things so that our "Hello" greeting can have a ~target~ other than "world".
 
-    #+name: macro-target_max_len
+    #+name: global-target_max_len
     #+begin_src c :noweb yes
       #ifndef TARGET_MAX_LEN
       #define TARGET_MAX_LEN 64
@@ -21,7 +21,7 @@
     ~TARGET_MAX_LEN~ is the maximum length of the name we'll store. This /could/ be set up as a load time parameter. However, since how the driver's major version is passed
     at load time is an example of a module parameter, a compile time parameter is simpler and sufficient here.
 
-    #+name: struct-hello_dev
+    #+name: global-struct-hello_dev
     #+begin_src c :noweb yes
       struct hello_dev {
 	char target[TARGET_MAX_LEN + 1];
@@ -155,6 +155,7 @@
 
     We set up the default target of the greeting by copying it into the recently allocated space for ~device~ using ~memcpy~.
 
+    #+name: init-add-cdev
     #+begin_src c :noweb yes
       int error;
       error = cdev_add(&device->cdev, dev, 1);
@@ -170,7 +171,54 @@
     2. The first device number this driver handles. ~dev~ is set to this early on during module loading.
     3. The number of minor numbers to add for this driver. We're only using a single device so 1 is fine.
 
-*** TODO Unloading
+
+    #+name: global-module_init
+    #+begin_src c :noweb yes
+      module_init(hello_init);
+    #+end_src
+
+    We wrap this loading functionality up in ~static int hello_init(void)~ and use [[https://www.kernel.org/doc/htmldocs/kernel-hacking/routines-init-again.html][~module_init~]] to tell the kernel how to load the module.
+
+    #+name: global-hello_init
+    #+begin_src c :noweb yes :exports none
+      static int hello_init(void) {
+	<<init-get-major-number>>
+
+	<<init-prepare-device-zero>>
+
+	<<init-prepare-device-setup>>
+
+	<<init-greeting-target>>
+
+	<<init-add-cdev>>
+
+	return result;
+      }
+    #+end_src
+
+*** Unloading
+
+    Unloading this module is a bit simpler. We have to free the memory we allocated and we have to unregister the driver.
+
+    #+name: global-hello_exit
+    #+begin_src c :noweb yes
+      static void hello_exit(void) {
+	dev_t dev_num = MKDEV(hello_major, hello_minor);
+
+	kfree(device);
+	unregister_chrdev_region(dev_num, 1);
+
+	return;
+      }
+    #+end_src
+
+    Memory is freed using [[https://www.kernel.org/doc/htmldocs/kernel-api/API-kfree.html][~kfree~]] which needs a pointer that was returned by ~kmalloc~. We're using ~device~ which was allocated when the module was loaded.
+
+    We use [[https://www.kernel.org/doc/htmldocs/kernel-api/API-unregister-chrdev-region.html][~unregister_chrdev_region~]] to release the device we allocated with ~alloc_chrdev_region~ when the module was loaded.
+    ~unregister_chrdev_region~ needs:
+    1. The first device number in the region. We're using ~MKDEV~ to build that based on ~hello_major~ and ~hello_minor~.
+    2. The number of devices. We allocated one when the module was loaded.
+
 ** TODO Opening and Closing a Device
 *** TODO Opening
 *** TODO Closing
@@ -184,6 +232,27 @@
 *** TODO ~hello-dev-unload.sh~
 *** TODO Interacting with the Device File
 
-** TODO Weaving
+#+begin_src c :noweb yes :tangle hello-dev.c :exports none
+  #include <asm-generic/fcntl.h>
+  #include <linux/cdev.h>
+  #include <linux/fs.h>
+  #include <linux/init.h>
+  #include <linux/kdev_t.h>
+  #include <linux/module.h>
+  #include <linux/moduleparam.h>
+  #include <linux/slab.h>
 
-   Maybe this will be in a different file so the main doc can be rendered as html? Maybe ~:export none~?
+  <<global-target_max_len>>
+
+  <<global-struct-hello_dev>>
+
+  <<global-device>>
+
+  <<global-hello_fops>>
+
+  <<global-hello_init>>
+
+  <<global-hello_exit>>
+
+  <<global-module_init>>
+#+end_src
