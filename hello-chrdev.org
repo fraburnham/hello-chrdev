@@ -1,0 +1,189 @@
+* Hello ~chrdev~
+
+  A learning module created by simplifying the scull module presented in chapter 3 of /Linux Device Drivers 3rd ed/.
+
+  ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
+  After which ~cat /dev/hello-dev0~ will output "Hello Bob".
+
+** WIP Loading and Unloading the Module
+
+*** Structs and Macros
+
+    We need to set up some things so that our "Hello" greeting can have a ~target~ other than "world".
+
+    #+name: macro-target_max_len
+    #+begin_src c :noweb yes
+      #ifndef TARGET_MAX_LEN
+      #define TARGET_MAX_LEN 64
+      #endif
+    #+end_src
+
+    ~TARGET_MAX_LEN~ is the maximum length of the name we'll store. This /could/ be set up as a load time parameter. However, since how the driver's major version is passed
+    at load time is an example of a module parameter, a compile time parameter is simpler and sufficient here.
+
+    #+name: struct-hello_dev
+    #+begin_src c :noweb yes
+      struct hello_dev {
+	char target[TARGET_MAX_LEN + 1];
+	struct cdev cdev;
+      };
+    #+end_src
+
+    The ~hello_dev~ struct will be used later to keep the ~target~, initially "world", associated with a specific device. This pattern enables creating multiple devices,
+    like ~/dev/hello-dev0~ and ~/dev/hello-dev1~, that each have independent state. This makes it easier to transition from a single device to multiple devices.
+
+*** Major Number Parameter
+
+    Each device has a major and minor number. The major is used by the kernel to determine which driver manages a devices. The minor is used to distinguish devices that
+    are managed by the same driver. The major and minor numbers can be seen in ~ls -l /dev/null~ output.
+
+    #+begin_src shell
+      $ ls -l /dev/null
+      crw-rw-rw- 1 root root 1, 3 Jun 29 17:51 /dev/null
+    #+end_src
+
+    In this case the major number is 1 and the minor number is 3. We can check in ~/proc/devices~ to see what driver manages ~/dev/null~.
+
+    #+begin_src shell
+      $ grep " 1 " /proc/devices
+       1 mem
+    #+end_src
+
+    We see that the ~mem~ driver handles ~/dev/null~ on this system.
+
+    Using a fixed major number can cause driver conflicts down the road, but being flexible is not without issue. We won't know what the major number is until after the
+    module is loaded so we can't create nodes in ~/dev~ before the module is loaded. The scull driver is not opinionated here. It allows setting the major number at compile 
+    time or load time and it will get a major number dynamically if one isn't set in advance. To keep things simpler this driver only allows a dynamic major number. We'll 
+    account for it the same way the ~scull_load~ does in ~hello-dev-load.sh~.
+
+    #+name: global-hello_numbers
+    #+begin_src c :noweb yes
+      int hello_major = 0;
+      int hello_minor = 0;
+    #+end_src
+
+    We'll use these globals to store the major and minor numbers.
+
+*** Loading
+
+    To be useful our driver needs to get a major number and initialize the state for the devices when it is loaded.
+
+    #+name: init-get-major-number
+    #+begin_src c :noweb yes
+      dev_t dev;
+      int result = 0;
+
+      result = alloc_chrdev_region(&dev, hello_minor, 1, "hello-dev");
+      hello_major = MAJOR(dev);
+
+      if (result < 0) {
+	printk(KERN_WARNING "hello: can't get major %d", hello_major);
+	return result;
+      }
+    #+end_src
+
+    To get a major number for our driver we'll call [[https://www.kernel.org/doc/htmldocs/kernel-api/API-alloc-chrdev-region.html][~alloc_chrdev_region~]], failing if the ~result~ of that call is negative.
+
+    ~alloc_chrdev_region~ needs:
+    1. A place to store the result. We're using ~dev_t dev~. ~dev_t~ is an integer type that represents the major and minor numbers for a device.
+    2. The first minor number to use. We've set ~hello_minor = 0~ above.
+    3. The number of devices to create.
+    4. A string name for the driver that will manage the devices. We'll use this later when we check for the major number in ~/proc/devices~
+       
+       
+    The ~MAJOR~ macro gets the major number from ~dev~ so it can be stored.
+    
+    Now that we've got a major number we can prepare the device!
+
+    #+name: global-device
+    #+begin_src c :noweb yes
+      struct hello_dev *device;
+    #+end_src
+
+    ~device~ gives us a global place to keep track of where the state for devices is in memory. If we were using more than one device we'd use an array of 
+    ~struct hello_dev *~ here instead.
+
+    #+name: init-prepare-device-zero
+    #+begin_src c :noweb yes
+      device = kmalloc(sizeof(struct hello_dev), GFP_KERNEL);
+      if (!device) {
+	result = -ENOMEM;
+       }
+      memset(device, 0, sizeof(struct hello_dev));
+    #+end_src
+
+    We allocate some space to store the state using [[https://www.kernel.org/doc/htmldocs/kernel-api/API-kmalloc.html][~kmalloc~]]. We'll have to free it when the module is unloaded. If the allocation fails we'll return a no memory error.
+    We also make sure to zero the memory out using ~memset~ because kernel memory is shared between modules. Zeroing reduces the risk that some secret data will get leaked.
+
+    ~kmalloc~ needs:
+    1. The number of bytes to allocate. We need enough to store an instance of ~struct hello_dev~.
+    2. The type of memory to allocate. All we need for now is normal kernel ram.
+
+
+    #+name: global-hello_fops
+    #+begin_src c :noweb yes
+      struct file_operations hello_fops = {
+	.owner = THIS_MODULE,
+	.read = hello_read,
+	.write = hello_write,
+	.open = hello_open,
+	.release = hello_release,
+      };
+    #+end_src
+
+    #+name: init-prepare-device-setup
+    #+begin_src c :noweb yes
+      cdev_init(&device->cdev, &hello_fops);
+      device->cdev.owner = THIS_MODULE;
+      device->cdev.ops = &hello_fops;
+    #+end_src
+
+    We set the device up by initializing it with [[https://www.kernel.org/doc/htmldocs/kernel-api/API-cdev-init.html][~cdev_init~]] since we're embedding a ~struct cdev~ in the ~struct hello_dev~. Once initalized we set the ~owner~ and point
+    ~ops~ at a ~struct file_operations~ which points at functions to call for things like reading and writing from the device. ~THIS_MODULE~ is a kernel macro that points
+    to the running module.
+
+    ~cdev_init~ needs:
+    1. A pointer to the memory to initalize. We're using ~cdev~ on ~device~.
+    2. A pointer to the file operations. We're using ~&hello_fops~ (the functions will be defined later).
+
+
+    #+name: init-greeting-target
+    #+begin_src c :noweb yes
+      char *default_target = "world";
+      memcpy(device->target, default_target, strlen(default_target));
+    #+end_src
+
+    We set up the default target of the greeting by copying it into the recently allocated space for ~device~ using ~memcpy~.
+
+    #+begin_src c :noweb yes
+      int error;
+      error = cdev_add(&device->cdev, dev, 1);
+      if (error) {
+	printk(KERN_NOTICE "Error %d adding hello%d", error, dev);
+      }
+    #+end_src
+
+    Finally we can add the device using [[https://www.kernel.org/doc/htmldocs/kernel-api/API-cdev-add.html][~cdev_add~]], logging a message if there is any problem.
+
+    ~cdev_add~ needs:
+    1. A pointer to the device to add. We're using the ~cdev~ which was recently initalized on ~device~.
+    2. The first device number this driver handles. ~dev~ is set to this early on during module loading.
+    3. The number of minor numbers to add for this driver. We're only using a single device so 1 is fine.
+
+*** TODO Unloading
+** TODO Opening and Closing a Device
+*** TODO Opening
+*** TODO Closing
+** TODO Reading and Writing Devices
+*** TODO Reading
+*** TODO Writing
+** TODO Building the Module
+*** TODO ~Makefile~
+** TODO Using It!
+*** TODO ~hello-dev-load.sh~
+*** TODO ~hello-dev-unload.sh~
+*** TODO Interacting with the Device File
+
+** TODO Weaving
+
+   Maybe this will be in a different file so the main doc can be rendered as html? Maybe ~:export none~?
