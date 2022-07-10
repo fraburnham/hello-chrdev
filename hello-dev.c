@@ -61,9 +61,9 @@ static int hello_init(void) {
 }
 
 static void hello_exit(void) {
-  dev_t dev_num = MKDEV(hello_major, hello_minor);
-
   kfree(device);
+
+  dev_t dev_num = MKDEV(hello_major, hello_minor);
   unregister_chrdev_region(dev_num, 1);
 
   return;

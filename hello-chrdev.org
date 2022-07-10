@@ -198,26 +198,45 @@
 
 *** Unloading
 
-    Unloading this module is a bit simpler. We have to free the memory we allocated and we have to unregister the driver.
+    Unloading this module is a bit simpler. We have to free the memory we allocated and unregister the driver.
 
-    #+name: global-hello_exit
+    #+name: exit-kfree
     #+begin_src c :noweb yes
-      static void hello_exit(void) {
-	dev_t dev_num = MKDEV(hello_major, hello_minor);
-
-	kfree(device);
-	unregister_chrdev_region(dev_num, 1);
-
-	return;
-      }
+      kfree(device);
     #+end_src
 
     Memory is freed using [[https://www.kernel.org/doc/htmldocs/kernel-api/API-kfree.html][~kfree~]] which needs a pointer that was returned by ~kmalloc~. We're using ~device~ which was allocated when the module was loaded.
 
+    #+name: exit-unregister_chrdev_region
+    #+begin_src c :noweb yes
+      dev_t dev_num = MKDEV(hello_major, hello_minor);
+      unregister_chrdev_region(dev_num, 1);
+    #+end_src
+
     We use [[https://www.kernel.org/doc/htmldocs/kernel-api/API-unregister-chrdev-region.html][~unregister_chrdev_region~]] to release the device we allocated with ~alloc_chrdev_region~ when the module was loaded.
+
     ~unregister_chrdev_region~ needs:
     1. The first device number in the region. We're using ~MKDEV~ to build that based on ~hello_major~ and ~hello_minor~.
     2. The number of devices. We allocated one when the module was loaded.
+
+
+    #+name: global-module_exit
+    #+begin_src c :noweb yes
+      module_exit(hello_exit);
+    #+end_src
+
+    We wrap this up in ~static void hello_exit(void)~ and use [[https://www.kernel.org/doc/htmldocs/kernel-hacking/routines-moduleexit.html][~module_exit~]] to let the kernel know how to unload the module.
+
+    #+name: global-hello_exit
+    #+begin_src c :noweb yes :exports none
+      static void hello_exit(void) {
+	<<exit-kfree>>
+
+	<<exit-unregister_chrdev_region>>
+
+	return;
+      }
+    #+end_src
 
 ** TODO Opening and Closing a Device
 *** TODO Opening
