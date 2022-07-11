@@ -5,6 +5,41 @@
   ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
 
+#+begin_src c :noweb yes :tangle hello-dev.c :exports none
+  // this file is generated using org and babel from hello-chrdev.org
+  #include <asm-generic/fcntl.h>
+  #include <linux/cdev.h>
+  #include <linux/fs.h>
+  #include <linux/init.h>
+  #include <linux/kdev_t.h>
+  #include <linux/module.h>
+  #include <linux/moduleparam.h>
+  #include <linux/slab.h>
+
+  <<global-target_max_len>>
+
+  <<global-struct-hello_dev>>
+
+  <<global-device>>
+
+  <<global-hello_open>>
+
+  <<global-hello_release>>
+
+  <<global-hello_read>>
+
+  <<global-hello_write>>
+
+  <<global-hello_fops>>
+
+  <<global-hello_init>>
+
+  <<global-hello_exit>>
+
+  <<global-module_init>>
+  <<global-module_exit>>
+#+end_src
+
 ** Loading and Unloading the Module
 *** Structs and Macros
 
@@ -281,7 +316,9 @@
 ** Reading and Writing Devices
 *** Reading
 
-    Our read function will be called by the kernel when something else tries to read from our device file. The kernel will pass us a ~struct file *~ so we can determine which
+    Our goal when reading from the device is to output a greeting like "Hello world" or an updated greeting if someone has written a new ~target~ to the device.
+
+    Our read function will be called by the kernel when someone tries to read from our device file. The kernel will pass us a ~struct file *~ so we can determine which
     device is being read from. If the driver were more sophisticated we would have made the ~private_data~ field of the ~file~ struct a pointer to our ~device~. That way we'd
     be able to access any state we had stored for the device. Since this driver only manages one device we can skip that detail.
 
@@ -295,13 +332,13 @@
 
     #+name: read-handle-read-conditions
     #+begin_src c :noweb yes
-      long leftover, transferred;
+      long leftover, transferred, remaining_bytes = strlen(data) - *offset;
 
-      if (*offset > strlen(data)) {
+      if (remaining_bytes <= 0) {
 	transferred = 0;
-      } else if (read_amount > strlen(data)) {
-	leftover = copy_to_user(buf, data + *offset, strlen(data) + 1);
-	transferred = strlen(data) + 1 - leftover;
+      } else if (read_amount > remaining_bytes) {
+	leftover = copy_to_user(buf, data + *offset, remaining_bytes + 1);
+	transferred = remaining_bytes + 1 - leftover;
       } else {
 	leftover = copy_to_user(buf, data + *offset, read_amount);
 	transferred = read_amount - leftover;
@@ -312,14 +349,12 @@
     update that offset after data is copied to user memory. 
 
     Before we go copying from kernel memory to user memory we need to check a couple things:
-    1. Is the offset past the end of the data we have to read? 
-       1. Set the amount of data ~transferred~ to zero since there is nothing left to read
+    1. Are there bytes left to read?
+       1. If not don't transfer anything to user memory
     2. Is the amount of data requested greater than the amount of data we have to read? 
-       1. Copy all of the data to user memory tracking any that failed to copy in ~leftover~
-       2. Set the amount of data ~transferred~ to be the length of ~data~, and a trailing null, minus whatever ~copy_to_user~ missed
+       1. If so attempt to transfer all the remaining data
     3. Otherwise the offset must be before the end of readable data and the amount of data requested must be less than the amount that can be read
-       1. Copy the requested amount of data to user memory tracking any that failed to copy in ~leftover~
-       2. Set the amount of data ~transferred~ to be the amount requested minus whatever ~copy_to_user~ missed
+       1. Attempt to transfer all the requested bytes from kernel memory to user memory
 
     We can't directly copy from kernel memory to user memory. Instead we need to use [[https://www.kernel.org/doc/html/v4.16/kernel-hacking/hacking.html#copy-to-user-copy-from-user-get-user-put-user][~copy_to_user~]] to move data around.
 
@@ -352,7 +387,62 @@
       }
     #+end_src
 
-*** TODO Writing
+*** Writing
+
+    The goal of writing to the device is to update the ~target~ of the greeting. This is where ~echo "Bob" > /dev/hello-dev0~ is able to update the device's state.
+
+    #+name: write-handle-write-logic
+    #+begin_src c :noweb yes
+      long leftover, transferred, remaining_space = TARGET_MAX_LEN - *offset;
+
+      if (remaining_space <= 0) {
+	transferred = 0;
+      } else if (write_amount > remaining_space) {
+	leftover = copy_from_user(device->target + *offset, buf, remaining_space);
+	transferred = remaining_space - leftover;
+      } else {
+	leftover = copy_from_user(device->target + *offset, buf, write_amount);
+	transferred = write_amount - leftover;
+      }
+    #+end_src
+
+    Similar to the read function we'll get ~write_amount~, which represents the desired number of bytes to write, and a pointer to an ~offset~, which represents how
+    many bytes into the data to start the write. We have to make sure to prevent writes that would be out of bounds either because the ~offset~ is past the end of our
+    data's allocated memory or because the ~write_amount~ is greater than the space we have for writing.
+
+    To determine how much space can still be written we subtract the desired offset from the number of bytes we have allocated.
+
+    Our checks look like:
+    1. Is there any space left for writing?
+       1. If not don't transfer anything
+    2. Is the amount of data to be written bigger than the space we have for writing?
+       1. If so attempt to transfer as much as we can from user memory to kernel memory and ignore the rest
+    3. Otherwise we must have room to write to and the offset is in bounds
+       1. Attempt to transfer all the data from user memory to kernel memory
+
+
+    TODO: Chunk on ~copy_from_user~
+
+    #+name: write-wrap-up
+    #+begin_src c :noweb yes
+      *offset = *offset + transferred;
+      return transferred;
+    #+end_src
+
+    Just like read has to advance the offset after reading we have to advance the offset after writing. We're also expected to return the number of bytes written.
+
+    We wrap up the write logic in ~ssize_t hello_write(struct file *f, const char __user *buf, size_t write_amount, loff_t *offset)~ so it works for a 
+    ~file_operations~ struct.
+
+    #+name: global-hello_write
+    #+begin_src c :noweb yes :exports none
+      ssize_t hello_write(struct file *f, const char __user *buf, size_t write_amount, loff_t *offset) {
+	<<write-handle-write-logic>>
+  
+	<<write-wrap-up>>
+      } 
+    #+end_src
+
 ** TODO Building the Module
 *** TODO ~Makefile~
 ** TODO Using It!
@@ -360,35 +450,3 @@
 *** TODO ~hello-dev-unload.sh~
 *** TODO Interacting with the Device File
 
-#+begin_src c :noweb yes :tangle hello-dev.c :exports none
-  // this file is generated using org and babel from hello-chrdev.org
-  #include <asm-generic/fcntl.h>
-  #include <linux/cdev.h>
-  #include <linux/fs.h>
-  #include <linux/init.h>
-  #include <linux/kdev_t.h>
-  #include <linux/module.h>
-  #include <linux/moduleparam.h>
-  #include <linux/slab.h>
-
-  <<global-target_max_len>>
-
-  <<global-struct-hello_dev>>
-
-  <<global-device>>
-
-  <<global-hello_open>>
-
-  <<global-hello_release>>
-
-  <<global-hello_read>>
-
-  <<global-hello_fops>>
-
-  <<global-hello_init>>
-
-  <<global-hello_exit>>
-
-  <<global-module_init>>
-  <<global-module_exit>>
-#+end_src

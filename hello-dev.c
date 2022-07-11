@@ -35,13 +35,13 @@ ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t 
   char data[72] = "Hello ";
   memcpy(data + strlen(data), device->target, strlen(device->target));
 
-  long leftover, transferred;
+  long leftover, transferred, remaining_bytes = strlen(data) - *offset;
   
-  if (*offset > strlen(data)) {
+  if (remaining_bytes <= 0) {
     transferred = 0;
-  } else if (read_amount > strlen(data)) {
-    leftover = copy_to_user(buf, data + *offset, strlen(data) + 1);
-    transferred = strlen(data) + 1 - leftover;
+  } else if (read_amount > remaining_bytes) {
+    leftover = copy_to_user(buf, data + *offset, remaining_bytes + 1);
+    transferred = remaining_bytes + 1 - leftover;
   } else {
     leftover = copy_to_user(buf, data + *offset, read_amount);
     transferred = read_amount - leftover;
@@ -51,6 +51,23 @@ ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t 
   
   return transferred;
 }
+
+ssize_t hello_write(struct file *f, const char __user *buf, size_t write_amount, loff_t *offset) {
+  long leftover, transferred, remaining_space = TARGET_MAX_LEN - *offset;
+  
+  if (remaining_space <= 0) {
+    transferred = 0;
+  } else if (write_amount > remaining_space) {
+    leftover = copy_from_user(device->target + *offset, buf, remaining_space);
+    transferred = remaining_space - leftover;
+  } else {
+    leftover = copy_from_user(device->target + *offset, buf, write_amount);
+    transferred = write_amount - leftover;
+  }
+
+  *offset = *offset + transferred;
+  return transferred;
+} 
 
 struct file_operations hello_fops = {
   .owner = THIS_MODULE,
