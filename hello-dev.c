@@ -18,6 +18,18 @@ struct hello_dev {
 
 struct hello_dev *device;
 
+int hello_open(struct inode *i, struct file *f) {
+  if ((f->f_flags & O_ACCMODE) == O_WRONLY) {
+    memset(device->target, 0, TARGET_MAX_LEN + 1);
+  }
+
+  return 0;
+}
+
+int hello_release(struct inode *i, struct file *f) {
+  return 0;
+}
+
 struct file_operations hello_fops = {
   .owner = THIS_MODULE,
   .read = hello_read,

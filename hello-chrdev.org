@@ -5,7 +5,6 @@
   ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
 
-** TODO Maybe? Some Definitions
 ** Loading and Unloading the Module
 *** Structs and Macros
 
@@ -131,6 +130,8 @@
       };
     #+end_src
 
+    We'll implement these functions later so that our driver can provide read and write capability.
+
     #+name: init-prepare-device-setup
     #+begin_src c :noweb yes
       cdev_init(&device->cdev, &hello_fops);
@@ -238,9 +239,46 @@
       }
     #+end_src
 
-** TODO Opening and Closing a Device
-*** TODO Opening
-*** TODO Closing
+** Opening and Closing a Device
+
+*** Opening
+
+    A more sophisticated driver might have multiple devices and need to know which one is being opened. The open function is passed a ~struct inode *~ which contians a pointer
+    to ~cdev~ on ~device~. If we managed more than one device we'd use [[https://www.kernel.org/doc/html/latest/driver-api/driver-model/design-patterns.html#container-of][~container_of~]] to determine /which/ device in our array of ~struct hello_dev~ was being opened. Once we 
+    have a pointer to a ~struct hello_dev~ it can be placed in ~struct file~'s ~private_data~ so that read and write functions have access to the device state.
+
+    #+name: open-zero-target
+    #+begin_src c :noweb yes
+      if ((f->f_flags & O_ACCMODE) == O_WRONLY) {
+	memset(device->target, 0, TARGET_MAX_LEN + 1);
+      }
+    #+end_src
+
+    This module doesn't have much setup to do on open. If the device file was opened write only then we zero out the ~target~ in anticipation of new data. We wrap it up in a
+    ~int hello_open (struct inode *i, struct file *f)~ so it matches what ~struct file_operations~ expects.
+
+    #+name: global-hello_open
+    #+begin_src c :noweb yes :exports none
+      int hello_open(struct inode *i, struct file *f) {
+	<<open-zero-target>>
+  
+	return 0;
+      }
+    #+end_src
+
+*** Closing
+
+    Easy setup makes for easy cleanup. There would be more to consider on the release side if the driver was more sophisticated.
+
+    #+name: global-hello_release
+    #+begin_src c :noweb yes
+      int hello_release(struct inode *i, struct file *f) {
+	return 0;
+      }
+    #+end_src
+
+    The function signature must match what is expected by ~struct file_operations~ like it does for ~hello_open~.
+    
 ** TODO Reading and Writing Devices
 *** TODO Reading
 *** TODO Writing
@@ -266,6 +304,10 @@
   <<global-struct-hello_dev>>
 
   <<global-device>>
+
+  <<global-hello_open>>
+
+  <<global-hello_release>>
 
   <<global-hello_fops>>
 
