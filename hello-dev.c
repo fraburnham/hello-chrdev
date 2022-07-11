@@ -1,3 +1,4 @@
+// this file is generated using org and babel from hello-chrdev.org
 #include <asm-generic/fcntl.h>
 #include <linux/cdev.h>
 #include <linux/fs.h>
@@ -82,3 +83,4 @@ static void hello_exit(void) {
 }
 
 module_init(hello_init);
+module_exit(hello_exit);

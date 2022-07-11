@@ -290,6 +290,7 @@
 *** TODO Interacting with the Device File
 
 #+begin_src c :noweb yes :tangle hello-dev.c :exports none
+  // this file is generated using org and babel from hello-chrdev.org
   #include <asm-generic/fcntl.h>
   #include <linux/cdev.h>
   #include <linux/fs.h>
@@ -316,4 +317,5 @@
   <<global-hello_exit>>
 
   <<global-module_init>>
+  <<global-module_exit>>
 #+end_src
