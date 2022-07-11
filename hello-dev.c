@@ -8,6 +8,9 @@
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
 
+int hello_major = 0;
+int hello_minor = 0;
+
 #ifndef TARGET_MAX_LEN
 #define TARGET_MAX_LEN 64
 #endif
@@ -32,16 +35,17 @@ int hello_release(struct inode *i, struct file *f) {
 }
 
 ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t *offset) {
+  long leftover, transferred, remaining_bytes;
   char data[72] = "Hello ";
+
   memcpy(data + strlen(data), device->target, strlen(device->target));
 
-  long leftover, transferred, remaining_bytes = strlen(data) - *offset;
-  
+  remaining_bytes = strlen(data) - *offset;
   if (remaining_bytes <= 0) {
     transferred = 0;
   } else if (read_amount > remaining_bytes) {
-    leftover = copy_to_user(buf, data + *offset, remaining_bytes + 1);
-    transferred = remaining_bytes + 1 - leftover;
+    leftover = copy_to_user(buf, data + *offset, remaining_bytes);
+    transferred = remaining_bytes - leftover;
   } else {
     leftover = copy_to_user(buf, data + *offset, read_amount);
     transferred = read_amount - leftover;
@@ -53,13 +57,13 @@ ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t 
 }
 
 ssize_t hello_write(struct file *f, const char __user *buf, size_t write_amount, loff_t *offset) {
-  long leftover, transferred, remaining_space = TARGET_MAX_LEN - *offset;
-  
-  if (remaining_space <= 0) {
+  long leftover, transferred, remaining_bytes;
+  remaining_bytes = TARGET_MAX_LEN - *offset;
+  if (remaining_bytes <= 0) {
     transferred = 0;
-  } else if (write_amount > remaining_space) {
-    leftover = copy_from_user(device->target + *offset, buf, remaining_space);
-    transferred = remaining_space - leftover;
+  } else if (write_amount > remaining_bytes) {
+    leftover = copy_from_user(device->target + *offset, buf, remaining_bytes);
+    transferred = write_amount - leftover;
   } else {
     leftover = copy_from_user(device->target + *offset, buf, write_amount);
     transferred = write_amount - leftover;
@@ -78,6 +82,8 @@ struct file_operations hello_fops = {
 };
 
 static int hello_init(void) {
+  int error;
+  char *default_target = "world";
   dev_t dev;
   int result = 0;
   
@@ -99,10 +105,8 @@ static int hello_init(void) {
   device->cdev.owner = THIS_MODULE;
   device->cdev.ops = &hello_fops;
 
-  char *default_target = "world";
   memcpy(device->target, default_target, strlen(default_target));
 
-  int error;
   error = cdev_add(&device->cdev, dev, 1);
   if (error) {
     printk(KERN_NOTICE "Error %d adding hello%d", error, dev);
@@ -112,13 +116,15 @@ static int hello_init(void) {
 }
 
 static void hello_exit(void) {
+  dev_t dev_num = MKDEV(hello_major, hello_minor);
+
   kfree(device);
 
-  dev_t dev_num = MKDEV(hello_major, hello_minor);
   unregister_chrdev_region(dev_num, 1);
 
   return;
 }
 
+MODULE_LICENSE("Dual BSD/GPL");
 module_init(hello_init);
 module_exit(hello_exit);

@@ -16,6 +16,8 @@
   #include <linux/moduleparam.h>
   #include <linux/slab.h>
 
+  <<global-hello-numbers>>
+
   <<global-target_max_len>>
 
   <<global-struct-hello_dev>>
@@ -36,6 +38,7 @@
 
   <<global-hello_exit>>
 
+  MODULE_LICENSE("Dual BSD/GPL");
   <<global-module_init>>
   <<global-module_exit>>
 #+end_src
@@ -90,7 +93,7 @@
     time or load time and it will get a major number dynamically if one isn't set in advance. To keep things simpler this driver only allows a dynamic major number. We'll 
     account for it the same way the ~scull_load~ does in ~hello-dev-load.sh~.
 
-    #+name: global-hello_numbers
+    #+name: global-hello-numbers
     #+begin_src c :noweb yes
       int hello_major = 0;
       int hello_minor = 0;
@@ -183,17 +186,25 @@
     2. A pointer to the file operations. We're using ~&hello_fops~ (the functions will be defined later).
 
 
-    #+name: init-greeting-target
+    #+name: init-greeting-target-data
     #+begin_src c :noweb yes
       char *default_target = "world";
+    #+end_src
+
+    #+name: init-greeting-target
+    #+begin_src c :noweb yes
       memcpy(device->target, default_target, strlen(default_target));
     #+end_src
 
     We set up the default target of the greeting by copying it into the recently allocated space for ~device~ using ~memcpy~.
 
-    #+name: init-add-cdev
+    #+name: init-add-cdev-data
     #+begin_src c :noweb yes
       int error;
+    #+end_src
+
+    #+name: init-add-cdev
+    #+begin_src c :noweb yes
       error = cdev_add(&device->cdev, dev, 1);
       if (error) {
 	printk(KERN_NOTICE "Error %d adding hello%d", error, dev);
@@ -218,6 +229,8 @@
     #+name: global-hello_init
     #+begin_src c :noweb yes :exports none
       static int hello_init(void) {
+	<<init-add-cdev-data>>
+	<<init-greeting-target-data>>
 	<<init-get-major-number>>
 
 	<<init-prepare-device-zero>>
@@ -243,9 +256,13 @@
 
     Memory is freed using [[https://www.kernel.org/doc/htmldocs/kernel-api/API-kfree.html][~kfree~]] which needs a pointer that was returned by ~kmalloc~. We're using ~device~ which was allocated when the module was loaded.
 
-    #+name: exit-unregister_chrdev_region
+    #+name: exit-unregister_chrdev_region-data
     #+begin_src c :noweb yes
       dev_t dev_num = MKDEV(hello_major, hello_minor);
+    #+end_src
+
+    #+name: exit-unregister_chrdev_region
+    #+begin_src c :noweb yes
       unregister_chrdev_region(dev_num, 1);
     #+end_src
 
@@ -266,6 +283,8 @@
     #+name: global-hello_exit
     #+begin_src c :noweb yes :exports none
       static void hello_exit(void) {
+	<<exit-unregister_chrdev_region-data>>
+
 	<<exit-kfree>>
 
 	<<exit-unregister_chrdev_region>>
@@ -321,24 +340,32 @@
     Our read function will be called by the kernel when someone tries to read from our device file. The kernel will pass us a ~struct file *~ so we can determine which
     device is being read from. If the driver were more sophisticated we would have made the ~private_data~ field of the ~file~ struct a pointer to our ~device~. That way we'd
     be able to access any state we had stored for the device. Since this driver only manages one device we can skip that detail.
+    
+    #+name: read-setup-data-data
+    #+begin_src c :noweb yes
+      char data[72] = "Hello ";
+    #+end_src
 
     #+name: read-setup-data
     #+begin_src c :noweb yes
-      char data[72] = "Hello ";
       memcpy(data + strlen(data), device->target, strlen(device->target));
     #+end_src
 
     We build up our greeting string so that it can be copied into user memory later.
 
+    #+name: read-handle-read-conditions-data
+    #+begin_src c :noweb yes
+      long leftover, transferred, remaining_bytes;
+    #+end_src
+
     #+name: read-handle-read-conditions
     #+begin_src c :noweb yes
-      long leftover, transferred, remaining_bytes = strlen(data) - *offset;
-
+      remaining_bytes = strlen(data) - *offset;
       if (remaining_bytes <= 0) {
 	transferred = 0;
       } else if (read_amount > remaining_bytes) {
-	leftover = copy_to_user(buf, data + *offset, remaining_bytes + 1);
-	transferred = remaining_bytes + 1 - leftover;
+	leftover = copy_to_user(buf, data + *offset, remaining_bytes);
+	transferred = remaining_bytes - leftover;
       } else {
 	leftover = copy_to_user(buf, data + *offset, read_amount);
 	transferred = read_amount - leftover;
@@ -379,6 +406,9 @@
     #+name: global-hello_read
     #+begin_src c :noweb yes :exports none
       ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t *offset) {
+	<<read-handle-read-conditions-data>>
+	<<read-setup-data-data>>
+
 	<<read-setup-data>>
 
 	<<read-handle-read-conditions>>
@@ -391,15 +421,19 @@
 
     The goal of writing to the device is to update the ~target~ of the greeting. This is where ~echo "Bob" > /dev/hello-dev0~ is able to update the device's state.
 
+    #+name: write-handle-write-logic-data
+    #+begin_src c :noweb yes
+      long leftover, transferred, remaining_bytes;
+    #+end_src
+
     #+name: write-handle-write-logic
     #+begin_src c :noweb yes
-      long leftover, transferred, remaining_space = TARGET_MAX_LEN - *offset;
-
-      if (remaining_space <= 0) {
+      remaining_bytes = TARGET_MAX_LEN - *offset;
+      if (remaining_bytes <= 0) {
 	transferred = 0;
-      } else if (write_amount > remaining_space) {
-	leftover = copy_from_user(device->target + *offset, buf, remaining_space);
-	transferred = remaining_space - leftover;
+      } else if (write_amount > remaining_bytes) {
+	leftover = copy_from_user(device->target + *offset, buf, remaining_bytes);
+	transferred = write_amount - leftover;
       } else {
 	leftover = copy_from_user(device->target + *offset, buf, write_amount);
 	transferred = write_amount - leftover;
@@ -417,11 +451,13 @@
        1. If not don't transfer anything
     2. Is the amount of data to be written bigger than the space we have for writing?
        1. If so attempt to transfer as much as we can from user memory to kernel memory and ignore the rest
+	  1. We'll lie a little bit here and tell the caller that all the requested data was written, minus anything ~copy_from_user~ missed, so that the caller won't
+	     keep trying to write data that won't fit.
     3. Otherwise we must have room to write to and the offset is in bounds
        1. Attempt to transfer all the data from user memory to kernel memory
 
 
-    TODO: Chunk on ~copy_from_user~
+    ~copy_from_user~ is similar to ~copy_to_user~ and we use it for the same reason. We can't directly copy from user memory to kernel memory for a variety of reasons.
 
     #+name: write-wrap-up
     #+begin_src c :noweb yes
@@ -437,15 +473,61 @@
     #+name: global-hello_write
     #+begin_src c :noweb yes :exports none
       ssize_t hello_write(struct file *f, const char __user *buf, size_t write_amount, loff_t *offset) {
+	<<write-handle-write-logic-data>>
 	<<write-handle-write-logic>>
-  
+
 	<<write-wrap-up>>
       } 
     #+end_src
 
-** TODO Building the Module
-*** TODO ~Makefile~
-** TODO Using It!
+** Building the Module
+*** ~Makefile~
+
+    Since we're building this moudle outside of a linux source tree the ~Makefile~ has two major phases:
+    1. Get in the kernel tree
+    2. Build the module
+
+
+    If ~$KERNELRELEASE~ is set then we're in the kernel tree.
+
+    #+name: in-tree-makefile
+    #+begin_src makefile :noweb yes
+      obj-m  := hello-dev.o
+    #+end_src
+
+    When we're in the kernel tree we can use this syntax to build a simple module.
+
+    #+name: out-tree-makefile
+    #+begin_src makefile :noweb yes
+      KDIR ?= /lib/modules/`uname -r`/build
+
+      default:
+	      $(MAKE) -C $(KDIR) M=$$PWD
+
+      clean:
+	      rm hello-dev.ko hello-dev.o
+    #+end_src
+
+    In the default case we call make again and pass the path to the kernel tree and the path to the module's source. When default invokes make it'll land in the "in-tree" portion of
+    the makefile above. ~KDIR~ is set to a common kernel source install path unless already specified. To compile for a version of the kernel that you're not running you'll likely
+    need to point ~KDIR~ to the root of the other kernel tree.
+
+    #+begin_src makefile :noweb yes :tangle Makefile :exports none
+      ifneq ($(KERNELRELEASE),)
+
+      <<in-tree-makefile>>
+
+      else
+
+      <<out-tree-makefile>>
+
+      endif
+
+    #+end_src
+
+    With the ~Makefile~ in place we can call ~make~ and build the module.
+
+** Using It!
 *** TODO ~hello-dev-load.sh~
 *** TODO ~hello-dev-unload.sh~
 *** TODO Interacting with the Device File
