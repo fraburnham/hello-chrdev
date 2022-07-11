@@ -1,6 +1,6 @@
 * Hello ~chrdev~
 
-  A learning module created by simplifying the scull module presented in chapter 3 of /Linux Device Drivers 3rd ed/.
+  A learning module created by simplifying the scull module presented in [[https://lwn.net/images/pdf/LDD3/ch03.pdf][chapter 3]] of [[https://lwn.net/Kernel/LDD3/][/Linux Device Drivers, Third Edition/]].
 
   ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
@@ -240,7 +240,6 @@
     #+end_src
 
 ** Opening and Closing a Device
-
 *** Opening
 
     A more sophisticated driver might have multiple devices and need to know which one is being opened. The open function is passed a ~struct inode *~ which contians a pointer
@@ -279,8 +278,80 @@
 
     The function signature must match what is expected by ~struct file_operations~ like it does for ~hello_open~.
     
-** TODO Reading and Writing Devices
-*** TODO Reading
+** Reading and Writing Devices
+*** Reading
+
+    Our read function will be called by the kernel when something else tries to read from our device file. The kernel will pass us a ~struct file *~ so we can determine which
+    device is being read from. If the driver were more sophisticated we would have made the ~private_data~ field of the ~file~ struct a pointer to our ~device~. That way we'd
+    be able to access any state we had stored for the device. Since this driver only manages one device we can skip that detail.
+
+    #+name: read-setup-data
+    #+begin_src c :noweb yes
+      char data[72] = "Hello ";
+      memcpy(data + strlen(data), device->target, strlen(device->target));
+    #+end_src
+
+    We build up our greeting string so that it can be copied into user memory later.
+
+    #+name: read-handle-read-conditions
+    #+begin_src c :noweb yes
+      long leftover, transferred;
+
+      if (*offset > strlen(data)) {
+	transferred = 0;
+      } else if (read_amount > strlen(data)) {
+	leftover = copy_to_user(buf, data + *offset, strlen(data) + 1);
+	transferred = strlen(data) + 1 - leftover;
+      } else {
+	leftover = copy_to_user(buf, data + *offset, read_amount);
+	transferred = read_amount - leftover;
+      }
+    #+end_src
+
+    When our read function is called it'll get the amount of data the caller is prepared to read as a ~size_t~ and an ~loff_t *~ that specifies the offset before the read. We'll
+    update that offset after data is copied to user memory. 
+
+    Before we go copying from kernel memory to user memory we need to check a couple things:
+    1. Is the offset past the end of the data we have to read? 
+       1. Set the amount of data ~transferred~ to zero since there is nothing left to read
+    2. Is the amount of data requested greater than the amount of data we have to read? 
+       1. Copy all of the data to user memory tracking any that failed to copy in ~leftover~
+       2. Set the amount of data ~transferred~ to be the length of ~data~, and a trailing null, minus whatever ~copy_to_user~ missed
+    3. Otherwise the offset must be before the end of readable data and the amount of data requested must be less than the amount that can be read
+       1. Copy the requested amount of data to user memory tracking any that failed to copy in ~leftover~
+       2. Set the amount of data ~transferred~ to be the amount requested minus whatever ~copy_to_user~ missed
+
+    We can't directly copy from kernel memory to user memory. Instead we need to use [[https://www.kernel.org/doc/html/v4.16/kernel-hacking/hacking.html#copy-to-user-copy-from-user-get-user-put-user][~copy_to_user~]] to move data around.
+
+    ~copy_to_user~ needs:
+    1. A destination pointer in user memory
+    2. A source pointer in kernel memory
+    3. How many bytes to copy
+
+
+    #+name: read-wrap-up
+    #+begin_src c :noweb yes
+      *offset = *offset + transferred;
+
+      return transferred;
+    #+end_src
+
+    Advance the offset based on how much data was successfully transferred. The function is also expected to return how much data was successfully moved.
+
+    Wrap the read logic up in ~ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t *offset)~ so that it can be used in a ~file_operations~ struct.
+    The ~__user~ on ~char __user *buf~ lets us know that the pointer is in user memory, not kernel memory.
+
+    #+name: global-hello_read
+    #+begin_src c :noweb yes :exports none
+      ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t *offset) {
+	<<read-setup-data>>
+
+	<<read-handle-read-conditions>>
+
+	<<read-wrap-up>>
+      }
+    #+end_src
+
 *** TODO Writing
 ** TODO Building the Module
 *** TODO ~Makefile~
@@ -309,6 +380,8 @@
   <<global-hello_open>>
 
   <<global-hello_release>>
+
+  <<global-hello_read>>
 
   <<global-hello_fops>>
 

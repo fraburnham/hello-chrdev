@@ -31,6 +31,27 @@ int hello_release(struct inode *i, struct file *f) {
   return 0;
 }
 
+ssize_t hello_read(struct file *f, char __user *buf, size_t read_amount, loff_t *offset) {
+  char data[72] = "Hello ";
+  memcpy(data + strlen(data), device->target, strlen(device->target));
+
+  long leftover, transferred;
+  
+  if (*offset > strlen(data)) {
+    transferred = 0;
+  } else if (read_amount > strlen(data)) {
+    leftover = copy_to_user(buf, data + *offset, strlen(data) + 1);
+    transferred = strlen(data) + 1 - leftover;
+  } else {
+    leftover = copy_to_user(buf, data + *offset, read_amount);
+    transferred = read_amount - leftover;
+  }
+
+  *offset = *offset + transferred;
+  
+  return transferred;
+}
+
 struct file_operations hello_fops = {
   .owner = THIS_MODULE,
   .read = hello_read,
