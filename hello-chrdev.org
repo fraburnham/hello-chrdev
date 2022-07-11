@@ -1,9 +1,12 @@
 * Hello ~chrdev~
 
-  A learning module created by simplifying the scull module presented in [[https://lwn.net/images/pdf/LDD3/ch03.pdf][chapter 3]] of [[https://lwn.net/Kernel/LDD3/][/Linux Device Drivers, Third Edition/]].
+  A rudimentary module created by simplifying the scull module presented in [[https://lwn.net/images/pdf/LDD3/ch03.pdf][chapter 3]] of [[https://lwn.net/Kernel/LDD3/][/Linux Device Drivers, Third Edition/]]. This is the first in a series on my journey to 
+  creating a driver that will allow wiring an [[https://en.wikipedia.org/wiki/Model_M_keyboard][IBM Model M]] directly to a [[https://www.raspberrypi.com/products/raspberry-pi-zero-w/][Raspberry PI Zero W]].
 
   ~cat /dev/hello-dev0~ will output "Hello world" once the module has been loaded. Any user can write to the device to update the greeting like ~echo -n "Bob" > /dev/hello-dev0~.
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
+
+  The code can be found at https://github.com/fraburnham/hello-chrdev
 
 #+begin_src c :noweb yes :tangle hello-dev.c :exports none
   // this file is generated using org and babel from hello-chrdev.org
@@ -513,6 +516,7 @@
     need to point ~KDIR~ to the root of the other kernel tree.
 
     #+begin_src makefile :noweb yes :tangle Makefile :exports none
+      # this file is generated using org and babel from hello-chrdev.org
       ifneq ($(KERNELRELEASE),)
 
       <<in-tree-makefile>>
@@ -528,7 +532,88 @@
     With the ~Makefile~ in place we can call ~make~ and build the module.
 
 ** Using It!
-*** TODO ~hello-dev-load.sh~
-*** TODO ~hello-dev-unload.sh~
-*** TODO Interacting with the Device File
 
+   The driver knows what to do when it is loaded or unloaded. Now we need to manage the environment around the module.
+
+*** ~hello-dev-load.sh~
+
+    #+name: load-locate-create
+    #+begin_src shell :noweb yes
+      MODULE=${MODULE:-"hello-dev"}
+      DEVICE=${DEVICE:-"hello-dev"}
+      /sbin/insmod ./$MODULE.ko $@
+      major=$(awk "\$2==\"$MODULE\" {print \$1}" /proc/devices)
+      mknod "/dev/${DEVICE}0" "c" "$major" "0"
+    #+end_src
+
+    Since we're using a dynamic major number we have to load the module, find the major number then create the files in ~/dev~. We use [[https://man7.org/linux/man-pages/man1/mknod.1.html][~mknod~]] to create the device files with the
+    major number extracted from ~/proc/devices~.
+
+    #+name: adjust-ownership
+    #+begin_src shell :noweb yes
+      MODE=${MODE:-"666"} # rw-rw-rw-
+      chmod $MODE /dev/${DEVICE}0
+    #+end_src
+
+    We adjust the mode to allow read and write for /everyone/ so that any user can ~cat /dev/hello-dev0~ or redirect data to it.
+
+    #+begin_src shell :noweb yes :exports none :tangle hello-dev-load.sh
+      #!/bin/bash
+
+      set -euo pipefail
+
+      [[ "$UID" == "0" ]] || (echo "Must run as root" && exit 1)
+
+      <<load-locate-create>>
+
+      <<adjust-ownership>>
+    #+end_src
+    
+*** ~hello-dev-unload.sh~
+
+    #+name: rmmod
+    #+begin_src shell :noweb yes
+      MODULE=${MODULE:-"hello-dev"}
+      /sbin/rmmod $MODULE $@ || exit 1
+    #+end_src
+
+    Unloading is a bit easier since we don't need to dig up any dynamic stuff.
+
+    #+name: rm
+    #+begin_src shell :noweb yes
+      DEVICE=${DEVICE:-"hello-dev"}
+      rm -f /dev/${DEVICE}?
+    #+end_src
+
+    We also need to remove the device file. This prevents conflicts if the driver gets a new major number next time it is loaded.
+
+    #+begin_src shell :noweb yes :tangle hello-dev-unload.sh :exports none
+      #!/bin/bash
+
+      set -xeuo pipefail
+
+      [[ "$UID" == "0" ]] || (echo "Must run as root" && exit 1)
+
+      <<rmmod>>
+
+      <<rm>>
+    #+end_src
+
+*** Interacting with the Device File
+
+    Interacting with the device is (finally) possible! And not complicated!
+
+    #+begin_src shell
+    $ cat /dev/hello-dev0
+    Hello world
+    #+end_src
+
+    We can ~cat~ the file which calls the ~hello_open~ and ~hello_read~ functions in turn to get data back to userland.
+
+    #+begin_src shell
+    $ echo "Foo" > /dev/hello-dev0
+    $ cat /dev/hello-dev0
+    Hello Foo
+    #+end_src
+
+    We can also update the greeting's target by redirecting some data to the device file.
