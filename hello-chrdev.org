@@ -505,7 +505,7 @@
       KDIR ?= /lib/modules/`uname -r`/build
 
       default:
-	      $(MAKE) -C $(KDIR) M=$$PWD
+	      $(MAKE) -C $(KDIR) M=$$PWD compile_commands.json
 
       clean:
 	      rm hello-dev.ko hello-dev.o
@@ -514,6 +514,8 @@
     In the default case we call make again and pass the path to the kernel tree and the path to the module's source. When default invokes make it'll land in the "in-tree" portion of
     the makefile above. ~KDIR~ is set to a common kernel source install path unless already specified. To compile for a version of the kernel that you're not running you'll likely
     need to point ~KDIR~ to the root of the other kernel tree.
+
+    The ~compile_commands.json~ target will generate a ~compile_commands.json~ file which ~clangd~ can use when it is acting as a language server. I use [[https://emacs-lsp.github.io/lsp-mode/page/lsp-clangd/][~lsp-mode~]] for emacs.
 
     #+begin_src makefile :noweb yes :tangle Makefile :exports none
       # this file is generated using org and babel from hello-chrdev.org
