@@ -1,4 +1,6 @@
-* Hello ~chrdev~
+#+TITLE: Hello chrdev
+#+HTML_HEAD: <link rel="stylesheet" type="text/css" href="org-style.css" />
+#+OPTIONS: toc:nil
 
   A rudimentary module created by simplifying the scull module presented in [[https://lwn.net/images/pdf/LDD3/ch03.pdf][chapter 3]] of [[https://lwn.net/Kernel/LDD3/][/Linux Device Drivers, Third Edition/]]. This is the first in a series on my journey to 
   creating a driver that will allow wiring an [[https://en.wikipedia.org/wiki/Model_M_keyboard][IBM Model M]] directly to a [[https://www.raspberrypi.com/products/raspberry-pi-zero-w/][Raspberry PI Zero W]].
@@ -7,6 +9,8 @@
   After which ~cat /dev/hello-dev0~ will output "Hello Bob".
 
   The code can be found at https://github.com/fraburnham/hello-chrdev
+
+#+TOC: headlines 1 local
 
 #+begin_src c :noweb yes :tangle hello-dev.c :exports none
   // this file is generated using org and babel from hello-chrdev.org
@@ -47,6 +51,7 @@
 #+end_src
 
 ** Loading and Unloading the Module
+#+TOC: headlines 1 local
 *** Structs and Macros
 
     We need to set up some things so that our "Hello" greeting can have a ~target~ other than "world".
@@ -297,6 +302,7 @@
     #+end_src
 
 ** Opening and Closing a Device
+#+TOC: headlines 1 local
 *** Opening
 
     A more sophisticated driver might have multiple devices and need to know which one is being opened. The open function is passed a ~struct inode *~ which contians a pointer
@@ -336,6 +342,7 @@
     The function signature must match what is expected by ~struct file_operations~ like it does for ~hello_open~.
     
 ** Reading and Writing Devices
+#+TOC: headlines 1 local
 *** Reading
 
     Our goal when reading from the device is to output a greeting like "Hello world" or an updated greeting if someone has written a new ~target~ to the device.
@@ -484,6 +491,7 @@
     #+end_src
 
 ** Building the Module
+#+TOC: headlines 1 local
 *** ~Makefile~
 
     Since we're building this moudle outside of a linux source tree the ~Makefile~ has two major phases:
@@ -537,6 +545,7 @@
 
    The driver knows what to do when it is loaded or unloaded. Now we need to manage the environment around the module.
 
+#+TOC: headlines 1 local
 *** ~hello-dev-load.sh~
 
     #+name: load-locate-create
